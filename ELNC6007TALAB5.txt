@@ -1,0 +1,890 @@
+
+
+
+
+	/* &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& */
+	/* --------------------->>>>>>>>>>>>>>>>>>>>> MBED PROGRAM <<<<<<<<<<<<<<<<<<<<----------------------------- */ 
+	/* &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& */
+
+//>>> Program Header >>>
+/*>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+	File Name:	ELNC6007TALAB5C  
+	Author:		Bharathwaj T A
+	Date:		22/04/2021
+	Modified:	None
+	@Fanshawe College, 2021
+
+	Description: Collect the structured sentence containing sensor details such as sample, 
+		     Channel number & mode, Limit & its value, and finally its checksum value 
+		     from PIC controller of address 918, validate, parse it, execute it and 
+		     finally display it 
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+#include "mbed.h"
+#include <string.h>
+
+#define TRUE 1
+#define FALSE 0
+
+#define MSGSIZE 30			// Size alloted for Message received from PIC controller of address 918 		
+
+#define TOKENSIZE 7			// Size alloted for Tokens that stores parsed strings
+
+// ------>>>>>>>>>>>> Each Token array contains the following details in this manner <<<<<<<<<<-----------
+#define CMDSTMT 0
+#define RECEIVER 1
+#define SENDER  2
+#define CHANNEL 3
+#define LIMIT 4
+#define VALUE 5
+#define CHECKSUM 6
+
+// ------>>>>>>>>>>>> PIC and MBED address value definition <<<<<<<<<<----------- 
+#define PIC 918
+#define MBED 1
+
+// ------>>>>>>>>>>>> Limits <<<<<<<<<<-----------
+#define HIGHLIMIT 'H'
+#define LOWLIMIT 'L'
+
+// ------>>>>>>>>>>>> Sensors <<<<<<<<<<----------
+#define SENSORS 3
+#define SENSOR1 0
+#define SENSOR2 1
+#define SENSOR3 2
+
+
+Serial print(USBTX, USBRX);				// print used for displaying values in Tera Term
+Serial pic(p9,p10);					// pic used for collecting data from PIC controller 
+
+typedef int sensor_t;                               	// Put name as sensor_t for int using typedef
+
+typedef struct sensorChannel                        
+{
+    sensor_t highLimit;
+    sensor_t lowLimit;
+}sensorSample_t;                                    	// sensorSample_t instead of sensorChannel using typedef
+
+sensorSample_t sensors[SENSORS];
+
+char rBuff[MSGSIZE];					
+char *prBuff = rBuff;
+char sentenceReady = FALSE;
+char *tokens[TOKENSIZE];
+char conlim[]={"CONLIM"};
+
+char channelNumber = 0, mode = FALSE;
+
+/*>>> displayValues: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:     Bharathwaj T A
+Date:       22/04/2021
+Modified:   None
+Desc:       Display the sensor values received from PIC controller in Tera Term  
+Input:      None  
+Returns:    None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void displayValues()
+{
+    
+    print.printf("\033[2J\033[H");
+    print.printf("\t\t\tELNC6007TALAB5C\n\r");
+    if(mode==LOWLIMIT)
+    {                                               
+        print.printf("\n\r CHANNEL NUMBER: %i AND MODE IS LOW", channelNumber);
+    }
+    else
+    {                                               
+        print.printf("\n\r CHANNEL NUMBER: %i AND MODE IS HIGH", channelNumber);
+    }                       
+    print.printf("\n\r");
+    print.printf("\n\r    SENSOR 1 \t          SENSOR 2 \t            SENSOR 3 \n\r");
+    print.printf("\n\r  HighLimit:%i%cC \t HighLimit:%i%cC \t  HighLimit:%i%cC",sensors[0].highLimit,248,sensors[1].highLimit,248,sensors[2].highLimit,248);
+    print.printf("\n\r  LowLimit :%i%cC \t LowLimit :%i%cC \t  LowLimit :%i%cC",sensors[0].lowLimit,248,sensors[1].lowLimit,248,sensors[2].lowLimit,248);
+    
+} // eo displayValues::
+
+/*>>> executeSentence: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:     Bharathwaj T A
+Date:       22/04/2021
+Modified:   None
+Desc:       Check whether the sender details stored in token array variable 
+            are correct, store the token values in structure members and 
+            display them finally using displayValues function   
+Input:      None  
+Returns:    None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void executeSentence(void)
+{
+    if(PIC==atoi(tokens[SENDER]))						// Checks whether Sender address is correct
+    {
+        if(MBED==atoi(tokens[RECEIVER]))					// Then checks whether Receiver address is correct
+        {
+            if(strcmp(tokens[CMDSTMT],conlim)==0)				// Then checks whether the command is 'CONLIM' or not
+            {
+                channelNumber=atoi(tokens[CHANNEL]);				// If yes, then channel Number is stored 			
+                if(*tokens[LIMIT]==HIGHLIMIT)                               	// Then Checks whether LIMIT is 'H' so that.......... 
+                {
+                    sensors[channelNumber].highLimit=atoi(tokens[VALUE]);	// ..........value is stored in highLimit value of the selected channel............      
+                }
+                else
+                {                   
+                    sensors[channelNumber].lowLimit=atoi(tokens[VALUE]);	// .......... or stored in lowLimit if LIMIT value is 'L' 
+                }
+                mode=*tokens[LIMIT];						// mode is also stored						
+            }  
+        }
+    }               
+}// eo executeSentence::
+
+/*>>> parseSentence: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:     Bharathwaj T A
+Date:       22/04/2021
+Modified:   None
+Desc:       Chops the string like decoupling the train into pieces of information  
+Input:      *ptr of type char which is equal to array variable name rBuff  
+Returns:    None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void parseSentence(char *ptr)
+{
+    char index=0;
+    while(*ptr)                         // Loop goes since ptr contains String. 
+    {
+        if(*ptr=='$'||*ptr==',')        // Checks whether contains $ or comma character so that.......
+        {
+            *ptr=0x00;                  // .........it is nulled.
+            tokens[index]=(ptr+1);	// Then the address value of characters after is stored in tokens 
+            index++;                    // Then index is incremented so that next set of characters is stored in next token variable 
+        }
+        ptr++;                          // Increment ptr address for checking every character 
+    }     
+}// eo parseSentence::
+
+/*>>> calculateChecksum: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:     Bharathwaj T A
+Date:       22/04/2021
+Modified:   None
+Desc:       Calculates checksum of the structured sentence received from PIC controller
+	    of address 918  
+Input:      *ptr of type char which is equal to array variable name rBuff  
+Returns:    Returns checkSum value of dataType char 
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+char calculateChecksum(char *ptr)
+{
+    char checkSum=0;
+    while(*ptr)
+    {
+        checkSum ^= *ptr;                       // Uses Exclusive XOR gate to calculate checkSum
+        ptr++;                                  // Inrements tBuf address which is array address so that we can use * to access the value for checkSum calculation
+    }
+    return checkSum;                            // Returns the checksum value to the validateSentence function
+} //eo calculateChecksum::
+
+/*>>> validateSentence: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:     Bharathwaj T A
+Date:       22/04/2021
+Modified:   None
+Desc:       Collects checksum from the sentence received and compares with the 
+	    checkSum calculated using XOR gate by calculateChecksum function  
+Input:      *bptr of type char which is equal to array variable name rBuff  
+Returns:    Returns TRUE if checksum collected from message matches with calculated
+	    checkSum otherwise returns FALSE
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+char validateSentence(char *bptr)
+{
+    char cs=0;
+    char rcs=0;
+    char count = strlen(bptr);			// count receives the length of the message received from PIC controller
+    char csFlag=FALSE;
+    
+    while(!csFlag)				// Loops inside it until checkSum is received
+    {
+        if(*(bptr+count)=='#')			// bptr will be at first array. Count will be equal to the total length. So when added, we get the last array address  
+        {
+            *(bptr+count)=0x00;			// In that address, if value is #, then we are making the value in that array or address as zero 
+        }
+// Then we decrement the count to point out to second last array address and check whether there are any # or commas
+        if(*(bptr+count)==',')			//If comma value founded in one of the array address, .......
+        {
+            *(bptr+count)=0x00;			// ......the address value is nulled,.........
+            rcs=atoi(bptr+count+1);		// ......and next array or address is atoi converted and stored in rcs. This value inside this address is checkSum value that is received from PIC controller
+            csFlag=TRUE;			// Makes csFlag TRUE for coming out of while loop
+        }
+        count--;
+    }
+    cs=calculateChecksum(bptr);			// Calculates checkSum
+    if(rcs==cs)				
+    {
+        return TRUE;
+    }
+// Returns true if received checkSum and calculated checkSum are equal
+    else
+    {
+        return FALSE;
+    }   
+} //eo validateSentence::
+
+/*>>> collectSentence: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:     Bharathwaj T A
+Date:       22/04/2021
+Modified:   None
+Desc:       Collects sentence if Serial interrupt occurs. Sentence contains data
+	    transmitted from PIC controller of address 918  
+Input:      None  
+Returns:    None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void collectSentence()
+{ 
+    while(sentenceReady!=TRUE||pic.readable())			// If any character received,............		
+    {
+            char data = pic.getc();				// ..............then data variable receives it			
+            if( data == '$')
+            {
+                prBuff = rBuff;					// This starts from begining of the array if character received is $ indicating start of sentence 
+            }
+// That data is stored in prBuff pointer. Then increments the pointer address and collects next character and goes on until.............
+            if( data == '#')					// ............ it receives an # character so that
+            {
+                *(prBuff+1) = 0x00;				// ............ it is received using *prBuff = data and next address is nulled				
+                sentenceReady=TRUE;				// Then we make sentence ready TRUE for exiting the loop
+            }
+            *prBuff = data;
+            prBuff++;
+    }
+}// eo collectSentence::
+
+/*>>> resetStructureVariables: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:     Bharathwaj T A
+Date:       22/04/2021
+Modified:   None
+Desc:       Resets high limit value and low limit value to zero for all three sensors  
+Input:      None  
+Returns:    None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void resetStructureVariables()
+{
+    char sensorChannel=0;
+    for(sensorChannel=0;sensorChannel<SENSORS;sensorChannel++)                                                                              
+    {
+        
+        sensors[sensorChannel].highLimit=0;
+        sensors[sensorChannel].lowLimit=0;                                                                                                    
+    }
+} //eo resetStructureVariables::
+
+int main()
+{
+    resetStructureVariables();				// Resets the structure variables before functioning
+    pic.attach(&collectSentence);			// This is the Serial Interrupt which makes the program go to the specified function called collectSentence if trigger or interrupt happens
+    while(TRUE)						// Inside this indefinite while loop...........
+    {
+        if(sentenceReady==TRUE)				// .............if sentenceReady is TRUE,............				
+        {
+            sentenceReady=FALSE;			// ............. then we make it FALSE, .............
+            if(validateSentence(rBuff))			// ............. check whether validation is done correctly so that ...........
+            {
+                parseSentence(rBuff);			// ............. parsing & ..............
+                executeSentence();            		// ............. execution is done,..............
+            }
+        }
+        displayValues(); 				// ............ and finally display the values of the structured sentence.
+        
+        wait(1);					// Waits for 1 second and then the whole process repeats again 
+    }
+} //eo main::
+
+
+
+
+	/* &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& */
+	/* ---------------------->>>>>>>>>>>>>>>>>>>>>>>>PIC PROGRAM <<<<<<<<<<<<<<<<<<<---------------------------- */
+	/* &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& */
+
+
+
+
+
+
+//>>> Program Header >>>
+/*>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+	File Name:	ELNC6007TALAB5  
+	Author:		Bharathwaj T A
+	Date:		22/04/2021
+	Modified:	None
+	@Fanshawe College, 2021
+
+	Description: To transmit the structured sentence which contains sensor details such as 
+		     sample, Channel number & mode, Limit & its value, and finally its checksum 
+		     value from PIC controller of address 918 to LPC1768 Mbed controller of Address 1  
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+// Preprocessor >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+#include <stdio.h>
+#include <p18f45k22.h>
+#include "pragmas.h"
+#include <usart.h>
+
+// Constants >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+#define TRUE  1
+#define FALSE 0
+#define TIME 5
+#define SENSORS 3
+#define SENSOR1 0x00
+#define SENSOR2 0x01
+#define SENSOR3 0x02
+#define PBMASK 0x0F
+#define PB1MASK 0x0E
+#define PB2MASK 0x0D
+#define PB3MASK 0x0B
+#define PB4MASK 0x07
+#define SAMPLESIZE 30
+#define BINTOVOL 0.00488
+#define COEFFICIENT 0.0166
+#define OFFSET 0.83							
+#define FALSESTART 0x0BDC
+#define DING INTCONbits.TMR0IF						// After count rollover, TMR0IF becomes 1 					
+#define FROMADDRESS 918 
+#define TOADDRESS 1
+#define TXDMSGSIZE 25
+// Global Variables >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+typedef int sensor_t;							// Put name as sensor_t for int using typedef
+
+typedef struct sensorChannel             				// Create Structure called sensorChannel that contains......
+{
+	sensor_t adcSamples[SAMPLESIZE];				// .........array that can collect upto 30 samples,.......... 		
+	sensor_t currentSample;						// .........current sample that is displayed after every collection, ..........
+	sensor_t highLimit;
+	sensor_t lowLimit;
+	int insertPoint;						// .........used in for loop for collecting samples, .........
+	sensor_t avgFlag;						// .........signal for displaying Average of 30 samples, .......
+	float average;							// .........and store and display average value.
+	sensor_t alarmState;
+}sensorSample_t;							// sensorSample_t instead of sensorChannel using typedef
+
+sensorSample_t sensors[SENSORS];
+
+char pushButton=0;
+char channelSelect = 0, mode = FALSE;					// Initialize channelSelect and mode as 0 & FALSE so that we can change values inside it.								
+char channelID=0; 
+float voltage=0;
+float temp=0; 
+int temperature[SENSORS];
+
+// >>> Function Header >>>
+/*>>> calculateAverage: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Calculates the average of the samples collected using Pointers, 
+		and converting it to Temperature value using Linear equation
+Input: 		*ptr of type sensorSample_t  
+Returns:	float, returns the value of temp containing temperature sensor 
+		value. All three sensors are assumed to be temperature sensor
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+float calculateAverage(sensorSample_t *ptr)
+{
+	if(ptr -> avgFlag==0) 
+	{
+		ptr -> average/=SAMPLESIZE;					// Defined SAMPLESIZE above as 30. Calculates average of 1st 30 samples.........
+		ptr -> avgFlag=1;						// ............ and makes avgFlag as 1
+	}
+	else
+	{
+		ptr -> average/=2;						// Formula to calculate average after each sample obtained if avgFlag is 1
+	}
+	voltage=ptr -> average * BINTOVOL;					// BINTOVOL means Binary to Voltage which is multipled with average of samples.......
+	temp=voltage-OFFSET;
+	temp/=COEFFICIENT;							// ...............and then use Linear equation to calculate temperature
+	return temp;
+} //eo calculateAverage:: 
+
+/*>>> resetStructureVariables: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Resets members in the data structure to zero using pointers at the initial stage 
+		and making high limit value and low limit value as 85 & 15 for all three sensors
+Input: 		*ptr of type sensorSample_t
+Returns:	None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void resetStructureVariables(sensorSample_t *ptr)
+{
+	char sensorChannel=0;
+	for(sensorChannel=0;sensorChannel<SENSORS;sensorChannel++)											// Three sensors condition 
+	{
+		for(ptr[sensorChannel] -> insertPoint = SAMPLESIZE;ptr[sensorChannel] -> insertPoint>0;(ptr[sensorChannel] -> insertPoint)--)		// Each sensor sample, and other members of structure variable ptr is initialized one by one in descending order i.e insertPoint starts from SAMPLESIZE number 
+		{
+			ptr[sensorChannel]->adcSamples[(ptr[sensorChannel]->insertPoint)-1]=0;
+			ptr[sensorChannel]->currentSample=0;
+			ptr[sensorChannel]->average=0;
+			ptr[sensorChannel]->avgFlag=0;
+			ptr[sensorChannel]->alarmState=0;			
+		}
+		ptr[sensorChannel]->highLimit=85;
+		ptr[sensorChannel]->lowLimit=15;													// Initialize these values as high=85 and low=15 for all three sensors 	 
+		temperature[sensorChannel]=0;
+	}
+	sensorChannel=0;
+	for(sensorChannel=0;sensorChannel<SENSORS;sensorChannel++)											// This sensor loop is to make insertPoint zero for all the sensor
+	{
+		ptr[sensorChannel]->insertPoint=0;	
+	}
+} //eo resetStructureVariables::
+
+/*>>> resetTMR0: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Resets the Timer so that counting starts from FALSESTART value 
+		for correct rollover after 1 second.
+Input: 		int, count variable that contains FALSESTART value. This FALSESTART
+		value comes from tmr0Config function 
+Returns:	None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void resetTMR0(int count)
+{
+	DING = FALSE;
+	TMR0H = count >> 8;
+	TMR0L = count;
+} //eo resetTMR0::
+
+/*>>> getADCSample: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Convert Analog to digital value and store it in sample variable 
+		of each sensor
+Input: 		int, analogChannel used for CHS bits of ADCON0 register which is 
+		changed in main function in a form of loop
+Returns:	int, sample which is equal to the Analog value received from the 
+		sensor 
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+int getADCSample(int analogChannel)
+{
+	int sample=0;
+	if(analogChannel==0)
+	{
+		ADCON0bits.CHS=SENSOR1;
+	}
+	if(analogChannel==1)
+	{
+		ADCON0bits.CHS=SENSOR2;			// CHS means Channel Select
+	}
+	if(analogChannel==2)
+	{
+		ADCON0bits.CHS=SENSOR3;
+	}
+	ADCON0bits.GO=TRUE;
+	while(ADCON0bits.GO);
+	sample = (int)ADRESH << 8;
+	sample+= ADRESL;
+	return sample;
+} //eo getADCSample::
+
+/*>>> tmr0Config: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Configure Timer 0 with 16 bit counter, and Prescale value of 1:16
+Input: 		count of type int which contains FALSESTART value
+Returns:	None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void tmr0Config(int count)
+{
+	resetTMR0(count);
+
+	T0CON = 0x93;
+} //eo tmr0Config::
+
+/*>>> adcConfig: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Configure ADC module to set Analog Channel 0 which is Port RA0, 
+		set GO bit 0 for conversion with 12TAD, Right justified, and 
+		select conversion clock bits to Fosc/8 
+Input: 		None
+Returns:	None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void adcConfig()
+{
+	ADCON0=0x01;
+	ADCON1=0x00;
+	ADCON2=0xA9;
+} //eo adcConfig::
+
+/*>>> serialPort1Config >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Configure Serial Port 1 with Baud rate of 9600bps for displaying 
+		sensor values and limits through MAX232
+Input: 		None
+Returns:	None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void serialPort1Config()
+{
+	SPBRG1   = 25;
+	TXSTA1   = 0x26;
+`	RCSTA1   = 0x90;
+	BAUDCON1 = 0x40;
+} //eo serialPort1Config::
+
+/*>>> serialPort2Config >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Configure Serial Port 2 with Baud rate of 9600bps for transmission 
+		to MBED controller of address 1
+Input: 		None
+Returns:	None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void serialPort2Config()
+{
+	SPBRG2   = 25;
+	TXSTA2   = 0x26;
+`	RCSTA2   = 0x90;
+	BAUDCON2 = 0x40;
+} // eo serialPort2Config::
+
+/*>>> portConfig: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Configure Port RA0, RA1, and RA2 as Analog Input for ADC sample, 
+		6th & 7th of PORT C & D as input for enabling Serial Ports
+Input: 		None
+Returns:	None 
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void portConfig()
+{
+	ANSELA = 0x07;						// Port RA0, RA1 and RA2 is made analog for ADC output
+	LATA   = 0x00;
+	TRISA  = 0xFF;
+	
+	ANSELB = 0x00;
+	LATB   = 0x0F;						// Port B lower nibbles is active low configuration. So we are making LATB of them high.
+	TRISB  = 0xFF;						// Port RB0 to RB3 are inputs for Push Buttons, 
+
+	ANSELC = 0x00;
+	LATC   = 0x07;
+	TRISC  = 0xB8;						// Port RC6 and 7 is used as input for enabling Serial Port 1 for Serial communication and Port RC0 to 2 are used as LED Output
+	
+	ANSELD = 0x00;
+	LATD   = 0x00;						
+	TRISD  = 0xBF;						 
+
+	ANSELE = 0x00;
+	LATE   = 0x00;
+	TRISE  = 0xFF;
+} // eo portConfig::
+
+/*>>> freqConfig: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Configure 4MHz Frequency
+Input: 		None
+Returns:	None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void freqConfig()
+{
+	OSCCON = 0x52;
+	while(!OSCCONbits.HFIOFS);
+} // eo freqConfig::
+
+/*>>> initializeSystem: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Initialize configuration before functioning
+Input: 		None
+Returns:	None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void initializeSystem()
+{
+	freqConfig();
+	portConfig();
+	serialPort1Config();
+	serialPort2Config();
+	adcConfig();
+	tmr0Config(FALSESTART);
+	printf("\033[2J\033[H");
+	printf("\n\r System Ready");
+} // eo initializeSystem::
+
+//----->>>>>>>>>>Functions for initialising before processing are defined above<<<<<<<<<<-----
+//----->>>>>>>>>>Functions for switching LED ON/OFF based on Push Button input are defined below<<<<<<<<<<-----
+
+/*>>> changeButtonInputs: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Changes Channel Number and Mode so that limit values can be varied 
+		depending upon the input from push buttons
+Input: 		None
+Returns:	None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void changeButtonInputs()
+{
+	char pushButton1=0,pushButton2=0,pushButton3=0,pushButton4=0;
+	pushButton4=pushButton&PB4MASK;							//PB4MASK is used to provide RB3 Push Button to pushButton4 for......  
+	if(pushButton4==PB4MASK)							//.........channel selection so that.................
+	{
+		if(channelSelect==2)
+		{
+			channelSelect=0;
+		}
+		else
+		{
+			channelSelect++;
+		}
+	}
+	pushButton3=pushButton&PB3MASK;
+	if(pushButton3==PB3MASK)
+	{
+		if(mode==FALSE)
+		{
+			mode=TRUE;
+		}
+		else
+		{
+			mode=FALSE;
+		}
+	}
+
+//...............Push Buttons connected at RB0 & RB1 will increment or decrement respectively.............................. 
+//...............the highLimit of selected channel by pushButton4 if mode==TRUE or lowLimit if mode==FALSE. mode is selected TRUE or FALSE by pushButton3 connected to RB2
+
+	pushButton2=pushButton&PB2MASK;
+	if(pushButton2==PB2MASK)
+	{
+		if(mode==TRUE)
+		{
+			sensors[channelSelect].highLimit--;
+		}
+		else
+		{
+			sensors[channelSelect].lowLimit--;
+		}	
+	}
+	pushButton1=pushButton&PB1MASK;
+	if(pushButton1==PB1MASK)
+	{
+		if(mode==TRUE)
+		{
+			sensors[channelSelect].highLimit++;	
+		}
+		else
+		{
+			sensors[channelSelect].lowLimit++;
+		}
+	}
+}// eo changeButtonInputs::
+
+/*>>> displayTempOutput: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Display pushButton inputs in form of channel number & mode, and 
+		info of all three sensors
+Input: 		None
+Returns:	None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void displayTempOutput()
+{
+	printf("\t\t\tELNC6007TALAB5\n\r");
+	if(mode==FALSE)
+	{												
+		printf("\n\r CHANNEL NUMBER: %i AND MODE IS FALSE", channelSelect);
+	}
+	else
+	{												
+		printf("\n\r CHANNEL NUMBER: %i AND MODE IS TRUE", channelSelect);
+	}						
+	printf("\n\r");
+	printf("\n\r    SENSOR 1 \t          SENSOR 2 \t            SENSOR 3 \n\r");
+	printf("\n\r  Current  :%i \t Current  :%i \t\t  Current  :%i",sensors[0].currentSample,sensors[1].currentSample,sensors[2].currentSample);
+	if(channelID==2&&sensors[channelID].avgFlag==1)
+	{
+		printf("\n\r  Average  :%i%cC \t Average  :%i%cC \t  Average  :%i%cC",temperature[0],248,temperature[1],248,temperature[2],248);					// After collecting 1st 30 samples only, the average will be displayed everytime
+	}
+	printf("\n\r  HighLimit:%i%cC \t HighLimit:%i%cC \t  HighLimit:%i%cC",sensors[0].highLimit,248,sensors[1].highLimit,248,sensors[2].highLimit,248);
+	printf("\n\r  LowLimit :%i%cC \t LowLimit :%i%cC \t  LowLimit :%i%cC",sensors[0].lowLimit,248,sensors[1].lowLimit,248,sensors[2].lowLimit,248);
+
+}// eo displayTempOutput::
+
+/*>>> displayLEDOutput: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Turn LED ON and display ALARM if values of three sensors not within 
+		limits or turn OFF and display SAFE if within limits 
+Input: 		None
+Returns:	None
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+void displayLEDOutput()
+{	// Checking Analog Channel 0 whether values are within limits
+	if(temperature[0]>sensors[0].lowLimit&&temperature[0]<sensors[0].highLimit)
+	{
+		LATCbits.LATC0=TRUE;
+		sensors[0].alarmState=0;
+		printf("\n\r  Status   :SAFE");
+	}
+	else
+	{
+		LATCbits.LATC0=FALSE;
+		sensors[0].alarmState=1;
+		printf("\n\r  Status   :ALARM");
+	}
+	// Checking Analog Channel 1 whether values are within limits
+	if(temperature[1]>sensors[1].lowLimit&&temperature[1]<sensors[1].highLimit)
+	{
+		LATCbits.LATC1=TRUE;
+		sensors[1].alarmState=0;
+		printf("\t Status:SAFE");
+	}
+	else
+	{
+		LATCbits.LATC1=FALSE;
+		sensors[1].alarmState=1;
+		printf("\t Status   :ALARM");
+	}
+	// Checking Analog Channel 2 whether values are within limits
+	if(temperature[2]>sensors[2].lowLimit&&temperature[2]<sensors[2].highLimit)
+	{
+		LATCbits.LATC2=TRUE;
+		sensors[2].alarmState=0;
+		printf("\t  Status:SAFE");
+	}
+	else
+	{
+		LATCbits.LATC2=FALSE;
+		sensors[2].alarmState=1;
+		printf("\t  Status   :ALARM");
+	}
+}// eo displayLEDOutput::
+
+/*>>> calculateChecksum: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Author:		Bharathwaj T A
+Date:		22/04/2021
+Modified:	None
+Desc:		Calculates the Check Sum of Structured sentence 'tBuf' and returns 
+		it to main function for merging it in message for transmission to Mbed 
+Input: 		*ptr of type char that contains tBuf variable
+Returns:	Returns checkSum value of dataType char
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>*/
+
+char calculateChecksum(char *ptr)
+{
+	char checkSum=0;
+	while(*ptr)
+	{
+		checkSum ^= *ptr;						// Uses Exclusive XOR gate to calculate checkSum
+		ptr++;								// Inrements tBuf address which is array address using ptr 
+	}
+	return checkSum;							// Returns the checksum value to the calling function in main()
+}//eo calculateChecksum::
+//----->>>>>>>>>>Main Function<<<<<<<<<<-----
+
+void main()
+{
+	char tBuf[TXDMSGSIZE],cs=0, time=0;
+	initializeSystem();
+	resetStructureVariables(&sensors);																																															
+	while(TRUE)
+	{
+ 		if(DING==TRUE)							// Check whether timer reaches 1 second to make DING True 
+		{
+			resetTMR0(FALSESTART);
+			printf("\033[2J\033[H");				// Clears the Tera term screen									
+			
+			pushButton = PORTB;					// PORT RB0 to 3 input received by pushButton
+			pushButton = pushButton&PBMASK;				// Mask the upper nibbles of PORT B
+
+			if(sensors[channelID].insertPoint<SAMPLESIZE)										// This is meant to increment insertPoint for.......
+			{
+				for(channelID=0;channelID<SENSORS;channelID++)
+				{
+					sensors[channelID].adcSamples[sensors[channelID].insertPoint]=getADCSample(channelID);			//......collecting samples from three different sensors per second
+					sensors[channelID].currentSample=sensors[channelID].adcSamples[sensors[channelID].insertPoint];
+					sensors[channelID].average+=sensors[channelID].adcSamples[sensors[channelID].insertPoint];		// Add the sample collected with average......... 
+					sensors[channelID].insertPoint++;									// and increment insertPoint			
+					
+					if(channelID==2&&sensors[channelID].avgFlag==0)														
+					{
+						displayTempOutput();					
+					}
+					if(sensors[channelID].insertPoint==SAMPLESIZE)														
+					{
+						sensors[channelID].insertPoint = 0;	
+						temperature[channelID]=calculateAverage(&sensors[channelID]);					// Function called to prints average of 1st 30 samples, convert it to temperature and display																				 	
+					}
+					if(sensors[channelID].insertPoint<SAMPLESIZE&&sensors[channelID].avgFlag==1)				// Same function except the fact that average is calculated and displayed after getting each sample if avgFlag is 1											
+					{
+						temperature[channelID]=calculateAverage(&sensors[channelID]);                                                                                       
+					}
+					if(channelID==2&&sensors[channelID].avgFlag==1)								// Display Temperature from three sensors and switch ON/ OFF the LED depending upon the limits and display SAFE if within limits and ALARM if outside LIMITS											
+					{
+						displayTempOutput();
+						displayLEDOutput();				
+					}
+				}
+				if(channelID==3)												// This is meant to make channelID zero so that it continues for next sample of each sensor. 
+				{
+					channelID=0;
+				}
+				if(pushButton!=0x0F)
+				{
+					changeButtonInputs();
+					if(mode==TRUE)
+					{
+						// $ indicates Start of Sentence similar to Locomotive of a Freight train
+						sprintf(tBuf,"$CONLIM,%i,%i,%i,H,%i",TOADDRESS,FROMADDRESS,channelSelect,sensors[channelSelect].highLimit);	// Stores High Limit value of specific Sensor which is selected by channelSelect variable if mode is TRUE
+					}
+					else
+					{
+						sprintf(tBuf,"$CONLIM,%i,%i,%i,L,%i",TOADDRESS,FROMADDRESS,channelSelect,sensors[channelSelect].lowLimit);	// Low Limit if mode is FALSE
+					}
+					cs=calculateChecksum(&tBuf);					// Calculates Check Sum
+					sprintf(tBuf,"%s,%i#\0",tBuf,cs);				// Adds # at end of Sentence to indicate END similar to a Caboose of a Freight Train
+					sprintf("%s",tBuf);				
+					printf("\n\r %s", tBuf);
+					puts2USART(tBuf);						// Finally it transmits the packaged information to Mbed controller.
+										
+					for(time=0;time<TIME;time++)					// for loop meant for displaying the sentence in tera term for 5 seconds if transmitted to Mbed. Transmission takes place where any of the four push Button is pressed
+					{
+						resetTMR0(FALSESTART);					
+						while(DING==FALSE);		
+					}		
+				}
+			}	
+		}
+	} // eo while:: 
+// eo main::	
+}
